@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sony Photo Booth</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #050509;
+        color: #f8fafc;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at top, rgba(124, 58, 237, 0.2), transparent 35rem),
+          linear-gradient(135deg, #050509 0%, #111827 100%);
+      }
+
+      .screen {
+        min-height: 100vh;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: clamp(1rem, 4vw, 4rem);
+        text-align: center;
+      }
+
+      .screen.active {
+        display: flex;
+      }
+
+      .hero {
+        width: min(100%, 58rem);
+        display: grid;
+        gap: 2rem;
+        justify-items: center;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(3rem, 10vw, 8rem);
+        line-height: 0.9;
+        letter-spacing: -0.08em;
+      }
+
+      .subtitle,
+      .status {
+        margin: 0;
+        max-width: 42rem;
+        color: #cbd5e1;
+        font-size: clamp(1.1rem, 2vw, 1.5rem);
+      }
+
+      button {
+        min-width: min(100%, 30rem);
+        border: 0;
+        border-radius: 999px;
+        padding: 1.4rem 2.2rem;
+        color: #020617;
+        background: linear-gradient(135deg, #f8fafc, #c4b5fd);
+        font-size: clamp(1.4rem, 4vw, 2.2rem);
+        font-weight: 900;
+        letter-spacing: -0.04em;
+        cursor: pointer;
+        box-shadow: 0 1.5rem 5rem rgba(196, 181, 253, 0.25);
+        touch-action: manipulation;
+      }
+
+      button:disabled {
+        cursor: wait;
+        opacity: 0.65;
+      }
+
+      .countdown-number {
+        font-size: clamp(10rem, 38vw, 28rem);
+        font-weight: 950;
+        line-height: 0.8;
+        text-shadow: 0 0 4rem rgba(255, 255, 255, 0.35);
+      }
+
+      .review-card {
+        width: min(100%, 72rem);
+        display: grid;
+        gap: 1rem;
+      }
+
+      .review-card img {
+        width: 100%;
+        max-height: 78vh;
+        object-fit: contain;
+        border-radius: 2rem;
+        background: #000;
+        box-shadow: 0 2rem 8rem rgba(0, 0, 0, 0.6);
+      }
+
+      .flash {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        pointer-events: none;
+        background: #fff;
+        opacity: 0;
+        transition: opacity 120ms ease-out;
+      }
+
+      .flash.visible {
+        opacity: 1;
+        transition: none;
+      }
+
+      .error {
+        color: #fecaca;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section id="homeScreen" class="screen active" aria-live="polite">
+        <div class="hero">
+          <h1>Photo Booth</h1>
+          <p class="subtitle">Sony α7 IV USB capture station</p>
+          <button id="startButton" type="button">Tap to Take Photo</button>
+          <p id="homeStatus" class="status">Get ready, then tap the button.</p>
+        </div>
+      </section>
+
+      <section id="countdownScreen" class="screen" aria-live="assertive">
+        <div id="countdownNumber" class="countdown-number">3</div>
+      </section>
+
+      <section id="reviewScreen" class="screen" aria-live="polite">
+        <div class="review-card">
+          <img id="capturedImage" alt="Captured photo from Sony camera" />
+          <p id="reviewStatus" class="status">Returning to start in 5 seconds...</p>
+        </div>
+      </section>
+    </main>
+
+    <div id="flashOverlay" class="flash" aria-hidden="true"></div>
+
+    <script>
+      const homeScreen = document.getElementById("homeScreen");
+      const countdownScreen = document.getElementById("countdownScreen");
+      const reviewScreen = document.getElementById("reviewScreen");
+      const countdownNumber = document.getElementById("countdownNumber");
+      const capturedImage = document.getElementById("capturedImage");
+      const startButton = document.getElementById("startButton");
+      const homeStatus = document.getElementById("homeStatus");
+      const reviewStatus = document.getElementById("reviewStatus");
+      const flashOverlay = document.getElementById("flashOverlay");
+
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      let busy = false;
+      let resetTimer;
+
+      const showScreen = (screen) => {
+        [homeScreen, countdownScreen, reviewScreen].forEach((item) => item.classList.remove("active"));
+        screen.classList.add("active");
+      };
+
+      const flash = async () => {
+        flashOverlay.classList.add("visible");
+        await wait(90);
+        flashOverlay.classList.remove("visible");
+      };
+
+      const resetHome = () => {
+        clearTimeout(resetTimer);
+        busy = false;
+        startButton.disabled = false;
+        homeStatus.classList.remove("error");
+        homeStatus.textContent = "Get ready, then tap the button.";
+        showScreen(homeScreen);
+      };
+
+      const runCountdown = async () => {
+        showScreen(countdownScreen);
+        for (let value = 3; value > 0; value -= 1) {
+          countdownNumber.textContent = value;
+          await wait(1000);
+        }
+      };
+
+      const capturePhoto = async () => {
+        await flash();
+        const response = await fetch("/api/capture", { method: "POST" });
+        const payload = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+          throw new Error(payload.detail || "Camera capture failed.");
+        }
+
+        return payload.image_url;
+      };
+
+      const startCaptureFlow = async () => {
+        if (busy) return;
+        busy = true;
+        startButton.disabled = true;
+        homeStatus.textContent = "Starting countdown...";
+
+        try {
+          await runCountdown();
+          countdownNumber.textContent = "";
+          const imageUrl = await capturePhoto();
+          capturedImage.src = `${imageUrl}?t=${Date.now()}`;
+          reviewStatus.textContent = "Returning to start in 5 seconds...";
+          showScreen(reviewScreen);
+          resetTimer = setTimeout(resetHome, 5000);
+        } catch (error) {
+          homeStatus.classList.add("error");
+          homeStatus.textContent = error.message;
+          showScreen(homeScreen);
+          busy = false;
+          startButton.disabled = false;
+        }
+      };
+
+      startButton.addEventListener("click", startCaptureFlow);
+      reviewScreen.addEventListener("click", resetHome);
+    </script>
+  </body>
+</html>
