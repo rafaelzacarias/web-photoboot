@@ -1,4 +1,4 @@
 fastapi==0.115.6
 uvicorn[standard]==0.32.1
 Jinja2==3.1.4
-gphoto2==2.5.0; platform_system != "Windows"
+gphoto2==2.6.3; platform_system != "Windows"
