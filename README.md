@@ -29,7 +29,7 @@ Menu wording can vary slightly by firmware version, but the required state is US
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 ### Platform notes
@@ -38,26 +38,26 @@ macOS:
 
 ```bash
 brew install libgphoto2
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 Linux:
 
 ```bash
 sudo apt-get install libgphoto2-dev gphoto2
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 Windows 11:
 
 1. Install a native `gphoto2.exe` build.
 2. Add the folder containing `gphoto2.exe` to `PATH`, or set `GPHOTO2_BIN` to its full path.
-3. Run `pip install -r requirements.txt`. The `gphoto2` Python package is skipped automatically on Windows.
+3. Run `python -m pip install -r requirements.txt`. The `gphoto2` Python package is skipped automatically on Windows.
 
 ## Run
 
 ```bash
-uvicorn app:app --host 127.0.0.1 --port 8000
+python -m uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
 Open <http://127.0.0.1:8000> in a browser and use full-screen mode for the booth UI.
@@ -77,4 +77,5 @@ Open <http://127.0.0.1:8000> in a browser and use full-screen mode for the booth
 - If no image appears, check that PC Remote save destination allows transfer to the computer.
 - On Windows, run `gphoto2.exe --auto-detect` to verify the camera is visible.
 - On macOS/Linux, run `gphoto2 --auto-detect` and confirm `libgphoto2` can see the camera.
+- If startup fails with `jinja2 must be installed to use Jinja2Templates`, make sure the virtual environment is active and reinstall the app dependencies with `python -m pip install -r requirements.txt` using the same Python environment that runs `python -m uvicorn`.
 - Increase the backend timeout with `PHOTOBOOTH_CAPTURE_TIMEOUT=60` if large RAW+JPEG transfers need more time.
