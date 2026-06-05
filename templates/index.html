@@ -20,9 +20,40 @@
         margin: 0;
         min-height: 100vh;
         overflow: hidden;
-        background:
-          radial-gradient(circle at top, rgba(124, 58, 237, 0.2), transparent 35rem),
-          linear-gradient(135deg, #050509 0%, #111827 100%);
+        background: #050509;
+      }
+
+      .live-preview {
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        overflow: hidden;
+        background: #000;
+      }
+
+      .live-preview video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        opacity: 0;
+        transition: opacity 250ms ease;
+      }
+
+      .live-preview video.ready {
+        opacity: 1;
+      }
+
+      .live-preview::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(180deg, rgba(2, 6, 23, 0.42), rgba(2, 6, 23, 0.1) 45%, rgba(2, 6, 23, 0.55));
+        pointer-events: none;
+      }
+
+      main {
+        position: relative;
+        z-index: 1;
       }
 
       .screen {
@@ -38,11 +69,26 @@
         display: flex;
       }
 
+      #homeScreen {
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+      }
+
+      #homeScreen.hide-intro .intro-copy,
+      #homeScreen.hide-intro #cameraSelect,
+      #homeScreen.hide-intro #startButton,
+      #homeScreen.hide-intro .status {
+        display: none;
+      }
+
       .hero {
         width: min(100%, 58rem);
         display: grid;
-        gap: 2rem;
+        gap: 1.2rem;
         justify-items: center;
+        padding: clamp(1rem, 4vw, 2rem);
+        text-shadow: 0 0.2rem 1.2rem rgba(0, 0, 0, 0.75);
       }
 
       h1 {
@@ -75,6 +121,29 @@
         touch-action: manipulation;
       }
 
+      .secondary-button {
+        min-width: min(100%, 18rem);
+        padding: 0.85rem 1.3rem;
+        color: #f8fafc;
+        background: rgba(2, 6, 23, 0.74);
+        border: 1px solid rgba(248, 250, 252, 0.35);
+        font-size: 1rem;
+        font-weight: 800;
+        letter-spacing: 0;
+        box-shadow: none;
+      }
+
+      select {
+        width: min(100%, 30rem);
+        border: 1px solid rgba(248, 250, 252, 0.3);
+        border-radius: 0.5rem;
+        padding: 0.8rem 1rem;
+        color: #f8fafc;
+        background: rgba(2, 6, 23, 0.72);
+        font: inherit;
+        font-size: 1rem;
+      }
+
       button:disabled {
         cursor: wait;
         opacity: 0.65;
@@ -85,6 +154,15 @@
         font-weight: 950;
         line-height: 0.8;
         text-shadow: 0 0 4rem rgba(255, 255, 255, 0.35);
+      }
+
+      .countdown-number.ready-message {
+        font-size: clamp(3rem, 12vw, 8rem);
+        line-height: 1;
+      }
+
+      .countdown-screen {
+        background: rgba(2, 6, 23, 0.18);
       }
 
       .review-card {
@@ -123,17 +201,23 @@
     </style>
   </head>
   <body>
+    <div class="live-preview" aria-hidden="true">
+      <video id="liveVideo" autoplay muted playsinline></video>
+    </div>
+
     <main>
       <section id="homeScreen" class="screen active" aria-live="polite">
         <div class="hero">
-          <h1>Photo Booth</h1>
-          <p class="subtitle">Sony α7 IV USB capture station</p>
+          <h1 class="intro-copy">Photo Booth</h1>
+          <p class="subtitle intro-copy">Sony α7 IV USB capture station</p>
+          <select id="cameraSelect" aria-label="Camera source" hidden></select>
+          <button id="previewButton" class="secondary-button" type="button" hidden>Enable Preview</button>
           <button id="startButton" type="button">Tap to Take Photo</button>
-          <p id="homeStatus" class="status">Get ready, then tap the button.</p>
+          <p id="homeStatus" class="status">Starting camera preview...</p>
         </div>
       </section>
 
-      <section id="countdownScreen" class="screen" aria-live="assertive">
+      <section id="countdownScreen" class="screen countdown-screen" aria-live="assertive">
         <div id="countdownNumber" class="countdown-number">3</div>
       </section>
 
@@ -153,14 +237,21 @@
       const reviewScreen = document.getElementById("reviewScreen");
       const countdownNumber = document.getElementById("countdownNumber");
       const capturedImage = document.getElementById("capturedImage");
+      const liveVideo = document.getElementById("liveVideo");
+      const cameraSelect = document.getElementById("cameraSelect");
+      const previewButton = document.getElementById("previewButton");
       const startButton = document.getElementById("startButton");
       const homeStatus = document.getElementById("homeStatus");
       const reviewStatus = document.getElementById("reviewStatus");
       const flashOverlay = document.getElementById("flashOverlay");
 
       const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const savedCameraId = localStorage.getItem("photoboothCameraId");
+      const GET_READY_HOLD_MS = 500;
       let busy = false;
       let resetTimer;
+      let liveStream;
+      let hasCapturedPhoto = false;
 
       const showScreen = (screen) => {
         [homeScreen, countdownScreen, reviewScreen].forEach((item) => item.classList.remove("active"));
@@ -179,19 +270,108 @@
         startButton.disabled = false;
         homeStatus.classList.remove("error");
         homeStatus.textContent = "Get ready, then tap the button.";
+        homeScreen.classList.toggle("hide-intro", hasCapturedPhoto);
         showScreen(homeScreen);
       };
 
+      const showPreviewError = (error) => {
+        homeStatus.classList.add("error");
+        previewButton.hidden = false;
+
+        if (error.name === "NotAllowedError") {
+          homeStatus.textContent = "Camera access is blocked. Allow it in the browser, then tap Enable Preview.";
+          return;
+        }
+
+        homeStatus.textContent = error.message;
+      };
+
+      const stopLiveStream = () => {
+        if (!liveStream) return;
+        liveStream.getTracks().forEach((track) => track.stop());
+        liveStream = undefined;
+      };
+
+      const listVideoDevices = async () => {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter((device) => device.kind === "videoinput");
+        cameraSelect.innerHTML = "";
+
+        videoDevices.forEach((device, index) => {
+          const option = document.createElement("option");
+          option.value = device.deviceId;
+          option.textContent = device.label || `Camera ${index + 1}`;
+          cameraSelect.append(option);
+        });
+
+        cameraSelect.hidden = videoDevices.length < 2;
+        return videoDevices;
+      };
+
+      const startLivePreview = async (deviceId) => {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error("Camera preview is not supported in this browser.");
+        }
+
+        stopLiveStream();
+        liveVideo.classList.remove("ready");
+
+        const constraints = {
+          audio: false,
+          video: deviceId
+            ? { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+            : { width: { ideal: 1920 }, height: { ideal: 1080 } },
+        };
+
+        liveStream = await navigator.mediaDevices.getUserMedia(constraints);
+        liveVideo.srcObject = liveStream;
+        await liveVideo.play();
+        liveVideo.classList.add("ready");
+        previewButton.hidden = true;
+        homeStatus.classList.remove("error");
+
+        const videoDevices = await listVideoDevices();
+        const activeDeviceId = liveStream.getVideoTracks()[0]?.getSettings().deviceId;
+        const selectedDevice = videoDevices.find((device) => device.deviceId === activeDeviceId);
+        if (selectedDevice) {
+          cameraSelect.value = selectedDevice.deviceId;
+          localStorage.setItem("photoboothCameraId", selectedDevice.deviceId);
+        }
+      };
+
+      const initializeLivePreview = async () => {
+        try {
+          await startLivePreview(savedCameraId);
+          homeStatus.textContent = "Get ready, then tap the button.";
+        } catch (error) {
+          if (savedCameraId) {
+            localStorage.removeItem("photoboothCameraId");
+            try {
+              await startLivePreview();
+              homeStatus.textContent = "Get ready, then tap the button.";
+            } catch (fallbackError) {
+              showPreviewError(fallbackError);
+            }
+            return;
+          }
+
+          showPreviewError(error);
+        }
+      };
+
       const runCountdown = async () => {
-        showScreen(countdownScreen);
+        countdownNumber.classList.add("ready-message");
+        countdownNumber.textContent = "Get ready!!";
+        await wait(GET_READY_HOLD_MS);
+        countdownNumber.classList.remove("ready-message");
+
         for (let value = 3; value > 0; value -= 1) {
           countdownNumber.textContent = value;
           await wait(1000);
         }
       };
 
-      const capturePhoto = async () => {
-        await flash();
+      const requestCapture = async () => {
         const response = await fetch("/api/capture", { method: "POST" });
         const payload = await response.json().catch(() => ({}));
 
@@ -202,6 +382,15 @@
         return payload.image_url;
       };
 
+      const captureResult = async (capturePromise) => {
+        const result = await capturePromise;
+        if (result.error) {
+          throw result.error;
+        }
+
+        return result.imageUrl;
+      };
+
       const startCaptureFlow = async () => {
         if (busy) return;
         busy = true;
@@ -209,9 +398,16 @@
         homeStatus.textContent = "Starting countdown...";
 
         try {
+          showScreen(countdownScreen);
+          const capturePromise = requestCapture()
+            .then((imageUrl) => ({ imageUrl }))
+            .catch((error) => ({ error }));
+
           await runCountdown();
           countdownNumber.textContent = "";
-          const imageUrl = await capturePhoto();
+          await flash();
+          const imageUrl = await captureResult(capturePromise);
+          hasCapturedPhoto = true;
           capturedImage.src = `${imageUrl}?t=${Date.now()}`;
           reviewStatus.textContent = "Returning to start in 5 seconds...";
           showScreen(reviewScreen);
@@ -226,7 +422,30 @@
       };
 
       startButton.addEventListener("click", startCaptureFlow);
+      window.addEventListener("keydown", (event) => {
+        const isTyping = ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName);
+        if (event.key.toLowerCase() === "p" && !event.repeat && !isTyping) {
+          event.preventDefault();
+          startCaptureFlow();
+        }
+      });
       reviewScreen.addEventListener("click", resetHome);
+      previewButton.addEventListener("click", initializeLivePreview);
+      cameraSelect.addEventListener("change", async () => {
+        localStorage.setItem("photoboothCameraId", cameraSelect.value);
+        homeStatus.classList.remove("error");
+        previewButton.hidden = true;
+        homeStatus.textContent = "Switching camera...";
+
+        try {
+          await startLivePreview(cameraSelect.value);
+          homeStatus.textContent = "Get ready, then tap the button.";
+        } catch (error) {
+          showPreviewError(error);
+        }
+      });
+
+      initializeLivePreview();
     </script>
   </body>
 </html>

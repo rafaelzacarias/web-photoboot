@@ -25,6 +25,8 @@ app = FastAPI(title="Sony α7 IV Web Photobooth")
 templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 app.mount("/captured_photos", StaticFiles(directory=str(CAPTURE_DIR)), name="captured_photos")
 
+MACOS_CAMERA_HELPERS = ("ptpcamerad", "mscamerad-xpc", "icdd")
+
 
 class CameraError(RuntimeError):
     """Raised when a camera capture cannot complete safely."""
@@ -80,15 +82,80 @@ def _capture_with_gphoto2_cli() -> Path:
         return target
 
 
+def _release_macos_camera_helpers() -> None:
+    if platform.system().lower() != "darwin":
+        return
+
+    for process_name in MACOS_CAMERA_HELPERS:
+        subprocess.run(
+            ["killall", process_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+
+
+def _detected_gphoto2_camera(gp, context) -> tuple[str, str]:
+    camera_list = gp.Camera.autodetect(context)
+    if camera_list.count() == 0:
+        raise CameraError(
+            "No gphoto2 camera was detected. Set the Sony USB mode to Remote Shooting, "
+            "close apps using the camera, then unplug and reconnect the USB cable."
+        )
+
+    return camera_list.get_name(0), camera_list.get_value(0)
+
+
+def _configure_gphoto2_camera(gp, context, model: str, port: str):
+    camera = gp.Camera()
+
+    abilities_list = gp.CameraAbilitiesList()
+    abilities_list.load(context)
+    camera.set_abilities(abilities_list.get_abilities(abilities_list.lookup_model(model)))
+
+    port_info_list = gp.PortInfoList()
+    port_info_list.load()
+    camera.set_port_info(port_info_list.get_info(port_info_list.lookup_path(port)))
+
+    return camera
+
+
+def _camera_error_message(exc: Exception, model: str | None = None, port: str | None = None) -> str:
+    message = str(exc)
+    camera = f" {model} on {port}" if model and port else ""
+
+    if "[-53]" in message or "Could not claim the USB device" in message:
+        return (
+            f"Camera detected{camera}, but macOS would not release the USB device. "
+            "Close FaceTime, Photos, Image Capture, and browser camera tabs; unplug/reconnect the Sony directly to the Mac "
+            "instead of through a dock; then try again."
+        )
+
+    if "[-105]" in message or "Unknown model" in message:
+        return (
+            "The Sony is not presenting itself as a remote-shooting camera. "
+            "Set USB mode to Remote Shooting, then unplug and reconnect the USB cable."
+        )
+
+    return f"Camera communication failed: {message}"
+
+
 def _capture_with_python_gphoto2() -> Path:
     try:
         import gphoto2 as gp
     except ImportError as exc:
         raise CameraError("python-gphoto2 is not installed. Run pip install -r requirements.txt after installing libgphoto2.") from exc
 
-    camera = gp.Camera()
+    context = gp.Context()
+    camera = None
+    model = None
+    port = None
+
     try:
-        camera.init()
+        model, port = _detected_gphoto2_camera(gp, context)
+        _release_macos_camera_helpers()
+        camera = _configure_gphoto2_camera(gp, context, model, port)
+        camera.init(context)
         file_path = camera.capture(gp.GP_CAPTURE_IMAGE)
         if not getattr(file_path, "folder", None) or not getattr(file_path, "name", None):
             raise CameraError("The camera did not report a captured file path.")
@@ -100,12 +167,13 @@ def _capture_with_python_gphoto2() -> Path:
     except CameraError:
         raise
     except gp.GPhoto2Error as exc:
-        raise CameraError(f"Camera communication failed: {exc}") from exc
+        raise CameraError(_camera_error_message(exc, model, port)) from exc
     finally:
-        try:
-            camera.exit()
-        except Exception:
-            pass
+        if camera is not None:
+            try:
+                camera.exit(context)
+            except Exception:
+                pass
 
 
 def capture_image() -> Path:
