@@ -41,6 +41,14 @@ brew install libgphoto2
 pip install -r requirements.txt
 ```
 
+For remote shooting on macOS, plug the camera directly into the Mac when possible. USB docks can work for webcam livestreaming but still prevent `libgphoto2` from claiming the remote-shooting PTP interface.
+
+Some macOS setups only allow `libgphoto2` to claim the camera USB interface as root. If direct USB detection works but capture fails with `Could not claim the USB device`, run the local server with sudo:
+
+```bash
+sudo .venv/bin/python3 -m uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
 Linux:
 
 ```bash
@@ -77,4 +85,6 @@ Open <http://127.0.0.1:8000> in a browser and use full-screen mode for the booth
 - If no image appears, check that PC Remote save destination allows transfer to the computer.
 - On Windows, run `gphoto2.exe --auto-detect` to verify the camera is visible.
 - On macOS/Linux, run `gphoto2 --auto-detect` and confirm `libgphoto2` can see the camera.
+- On macOS, if the app says the camera was detected but the USB device could not be claimed, close FaceTime, Photos, Image Capture, and browser camera tabs, then unplug/reconnect the camera directly to the Mac. Apple's `ptpcamerad` and `icdd` services can hold the PTP interface.
+- If direct USB still fails on macOS but `sudo .venv/bin/python3 test_remote_shoot.py` initializes the camera, run the FastAPI server with sudo as shown above.
 - Increase the backend timeout with `PHOTOBOOTH_CAPTURE_TIMEOUT=60` if large RAW+JPEG transfers need more time.
